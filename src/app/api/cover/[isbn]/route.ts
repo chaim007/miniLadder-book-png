@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { S3Client, HeadObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3'
+import { S3Client, HeadObjectCommand, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3'
 import { fetchBookCover } from '@/lib/fetchBookCover'
+import type { CoverData } from '@/lib/fetchBookCover'
 
 let s3Client: S3Client | null = null
 try {
@@ -22,54 +23,59 @@ export async function GET(request: NextRequest, { params }: { params: { isbn: st
   const key = `${isbn}.jpg`
 
   try {
-    if (s3Client && bucketName) {
-      const headCommand = new HeadObjectCommand({
-        Bucket: bucketName,
-        Key: key,
-      })
-
-      try {
-        const headResponse = await s3Client.send(headCommand)
-        console.log(`File ${key} already exists in S3, redirecting...`)
-        const url = `${process.env.B2_ENDPOINT}/${bucketName}/${key}`
-        return NextResponse.redirect(url)
-      } catch (error: any) {
-        if (error.name === 'NotFound') {
-          console.log(`File ${key} not found in S3, proceeding to upload...`)
-        } else {
-          console.warn(`Error checking file existence in S3:`, error)
-        }
-      }
-    }
-
-    const coverData = await fetchBookCover(isbn)
+    let coverData: CoverData
     
     if (s3Client && bucketName) {
-      const putCommand = new PutObjectCommand({
-        Bucket: bucketName,
-        Key: key,
-        Body: coverData.buffer,
-        ContentType: coverData.contentType,
-      })
-
       try {
-        await s3Client.send(putCommand)
-        console.log(`Successfully uploaded ${key} to S3`)
-      } catch (error: any) {
-        if (error.name === 'NoSuchBucket') {
-          console.error(`Bucket ${bucketName} does not exist`)
-        } else if (error.name === 'InvalidAccessKeyId') {
-          console.error('Invalid S3 credentials')
+        const getCommand = new GetObjectCommand({
+          Bucket: bucketName,
+          Key: key,
+        })
+        
+        const getResponse = await s3Client.send(getCommand)
+        console.log(`File ${key} found in S3, returning from cache...`)
+        
+        const buffer = await getResponse.Body?.transformToByteArray()
+        if (buffer) {
+          coverData = {
+            buffer: Buffer.from(buffer),
+            contentType: getResponse.ContentType || 'image/jpeg',
+          }
         } else {
-          console.warn(`Failed to upload ${key} to S3, returning cover directly:`, error)
+          throw new Error('Empty response from S3')
+        }
+      } catch (error: any) {
+        if (error.name === 'NotFound') {
+          console.log(`File ${key} not found in S3, fetching from sources...`)
+          coverData = await fetchBookCover(isbn)
+          
+          const putCommand = new PutObjectCommand({
+            Bucket: bucketName,
+            Key: key,
+            Body: coverData.buffer,
+            ContentType: coverData.contentType,
+          })
+
+          try {
+            await s3Client.send(putCommand)
+            console.log(`Successfully uploaded ${key} to S3`)
+          } catch (error: any) {
+            console.warn(`Failed to upload ${key} to S3, but returning cover anyway:`, error)
+          }
+        } else {
+          console.warn(`Error accessing S3:`, error)
+          coverData = await fetchBookCover(isbn)
         }
       }
+    } else {
+      coverData = await fetchBookCover(isbn)
     }
 
     const response = new NextResponse(coverData.buffer, {
       status: 200,
       headers: {
         'Content-Type': coverData.contentType,
+        'Cache-Control': 'public, max-age=86400',
       },
     })
 
