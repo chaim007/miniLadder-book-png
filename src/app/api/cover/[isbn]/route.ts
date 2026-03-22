@@ -2,42 +2,69 @@ import { NextRequest, NextResponse } from 'next/server'
 import { S3Client, HeadObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3'
 import { fetchBookCover } from '@/lib/fetchBookCover'
 
-const s3Client = new S3Client({
-  endpoint: process.env.B2_ENDPOINT,
-  credentials: {
-    accessKeyId: process.env.B2_KEY_ID!,
-    secretAccessKey: process.env.B2_APPLICATION_KEY!,
-  },
-  region: 'us-west-004',
-})
+let s3Client: S3Client | null = null
+try {
+  s3Client = new S3Client({
+    endpoint: process.env.B2_ENDPOINT,
+    credentials: {
+      accessKeyId: process.env.B2_KEY_ID!,
+      secretAccessKey: process.env.B2_APPLICATION_KEY!,
+    },
+    region: 'us-west-004',
+  })
+} catch (error) {
+  console.warn('S3 client initialization failed, will skip S3 operations')
+}
 
 export async function GET(request: NextRequest, { params }: { params: { isbn: string } }) {
   const { isbn } = params
   const bucketName = process.env.B2_BUCKET_NAME!
+  const key = `${isbn}.jpg`
 
   try {
-    const headCommand = new HeadObjectCommand({
-      Bucket: bucketName,
-      Key: `${isbn}.jpg`,
-    })
+    if (s3Client && bucketName) {
+      const headCommand = new HeadObjectCommand({
+        Bucket: bucketName,
+        Key: key,
+      })
 
-    try {
-      await s3Client.send(headCommand)
-      const url = `${process.env.B2_ENDPOINT}/${bucketName}/${isbn}.jpg`
-      return NextResponse.redirect(url)
-    } catch (error) {
+      try {
+        const headResponse = await s3Client.send(headCommand)
+        console.log(`File ${key} already exists in S3, redirecting...`)
+        const url = `${process.env.B2_ENDPOINT}/${bucketName}/${key}`
+        return NextResponse.redirect(url)
+      } catch (error: any) {
+        if (error.name === 'NotFound') {
+          console.log(`File ${key} not found in S3, proceeding to upload...`)
+        } else {
+          console.warn(`Error checking file existence in S3:`, error)
+        }
+      }
     }
 
     const coverData = await fetchBookCover(isbn)
     
-    const putCommand = new PutObjectCommand({
-      Bucket: bucketName,
-      Key: `${isbn}.jpg`,
-      Body: coverData.buffer,
-      ContentType: coverData.contentType,
-    })
+    if (s3Client && bucketName) {
+      const putCommand = new PutObjectCommand({
+        Bucket: bucketName,
+        Key: key,
+        Body: coverData.buffer,
+        ContentType: coverData.contentType,
+      })
 
-    await s3Client.send(putCommand)
+      try {
+        await s3Client.send(putCommand)
+        console.log(`Successfully uploaded ${key} to S3`)
+      } catch (error: any) {
+        if (error.name === 'NoSuchBucket') {
+          console.error(`Bucket ${bucketName} does not exist`)
+        } else if (error.name === 'InvalidAccessKeyId') {
+          console.error('Invalid S3 credentials')
+        } else {
+          console.warn(`Failed to upload ${key} to S3, returning cover directly:`, error)
+        }
+      }
+    }
 
     const response = new NextResponse(coverData.buffer, {
       status: 200,
