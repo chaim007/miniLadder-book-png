@@ -3,8 +3,8 @@ import { cacheManager } from './cacheManager'
 
 export interface BookInfo {
   isbn: string
-  title: string
-  authors: string[]
+  title?: string
+  authors?: string[]
   publisher?: string
   publishDate?: string
   description?: string
