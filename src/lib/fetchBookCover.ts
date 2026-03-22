@@ -1,9 +1,39 @@
 import { requestQueue } from './requestQueue'
 import { cacheManager } from './cacheManager'
 
+export interface BookInfo {
+  isbn: string
+  title: string
+  authors: string[]
+  publisher?: string
+  publishDate?: string
+  description?: string
+  pageCount?: number
+  language?: string
+  coverUrl?: string
+}
+
 export interface CoverData {
   buffer: Buffer
   contentType: string
+}
+
+export interface BookData {
+  info: BookInfo
+  cover: CoverData
+}
+
+export async function fetchBookData(isbn: string): Promise<BookData> {
+  const coverData = await fetchBookCover(isbn)
+  const bookInfo = await fetchBookInfo(isbn)
+  
+  return {
+    info: {
+      isbn,
+      ...bookInfo
+    },
+    cover: coverData
+  }
 }
 
 export async function fetchBookCover(isbn: string): Promise<CoverData> {
@@ -176,4 +206,69 @@ export async function fetchBookCover(isbn: string): Promise<CoverData> {
   })
 
   return coverData
+}
+
+export async function fetchBookInfo(isbn: string): Promise<Partial<BookInfo>> {
+  try {
+    const googleBooksUrl = `https://www.googleapis.com/books/v1/volumes?q=isbn:${isbn}`
+    const response = await fetch(googleBooksUrl, {
+      method: 'GET',
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      },
+    })
+
+    if (response.ok) {
+      const data = await response.json()
+      if (data.items && data.items.length > 0) {
+        const volumeInfo = data.items[0].volumeInfo
+        return {
+          title: volumeInfo.title || 'Unknown Title',
+          authors: volumeInfo.authors || ['Unknown Author'],
+          publisher: volumeInfo.publisher,
+          publishDate: volumeInfo.publishedDate,
+          description: volumeInfo.description,
+          pageCount: volumeInfo.pageCount,
+          language: volumeInfo.language,
+          coverUrl: volumeInfo.imageLinks?.thumbnail
+        }
+      }
+    }
+  } catch (error) {
+    console.error('Error fetching book info from Google Books:', error)
+  }
+
+  try {
+    const openLibraryUrl = `https://openlibrary.org/api/books?bibkeys=ISBN:${isbn}&format=json&jscmd=data`
+    const response = await fetch(openLibraryUrl, {
+      method: 'GET',
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      },
+    })
+
+    if (response.ok) {
+      const data = await response.json()
+      const book = data[`ISBN:${isbn}`]
+      if (book) {
+        return {
+          title: book.title || 'Unknown Title',
+          authors: book.authors ? book.authors.map((a: any) => a.name) : ['Unknown Author'],
+          publisher: book.publishers ? book.publishers[0]?.name : undefined,
+          publishDate: book.publish_date,
+          description: book.description?.value || book.description,
+          pageCount: book.number_of_pages,
+          language: book.language,
+          coverUrl: book.cover?.large
+        }
+      }
+    }
+  } catch (error) {
+    console.error('Error fetching book info from OpenLibrary:', error)
+  }
+
+  return {
+    title: 'Unknown Title',
+    authors: ['Unknown Author']
+  }
 }
