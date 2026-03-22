@@ -1,0 +1,13 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: oklch(0.9816 0.0017 247.8390);
+  --foreground: oklch(0.3351 0.0331 260.9120);
+}
+
+body {
+  background-color: var(--background);
+  color: var(--foreground);
+}
